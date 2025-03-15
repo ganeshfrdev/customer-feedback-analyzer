@@ -3,6 +3,8 @@ import random
 import sqlite3
 from datetime import datetime
 from transformers import pipeline
+from collections import Counter
+import re
 
 app = FastAPI()
 
@@ -18,8 +20,11 @@ FEEDBACK_TEMPLATES = [
     "Why is @{username} so expensive?",
 ]
 
-# Setup sentiment analysis pipeline
+# Sentiment analysis pipeline
 sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+
+# Basic stop words list
+STOP_WORDS = {"the", "is", "to", "and", "your", "for", "from", "so", "in", "on", "at", "with", "a", "an"}
 
 # Database setup
 def init_db():
@@ -68,9 +73,6 @@ def get_stored_feedback(username: str):
 
 @app.get("/analyze/{username}")
 def analyze_feedback(username: str):
-    """
-    Analyze stored feedback for sentiment.
-    """
     conn = sqlite3.connect("feedback.db")
     c = conn.cursor()
     c.execute("SELECT text FROM feedback WHERE username = ?", (username,))
@@ -80,13 +82,21 @@ def analyze_feedback(username: str):
     if not rows:
         return {"username": username, "analysis": "No feedback found"}
 
-    # Analyze sentiment
     feedback_texts = [row[0] for row in rows]
-    results = sentiment_analyzer(feedback_texts)
-    
-    # Summarize
+    sentiment_results = sentiment_analyzer(feedback_texts)
     analysis = [
         {"text": text, "sentiment": result["label"], "confidence": result["score"]}
-        for text, result in zip(feedback_texts, results)
+        for text, result in zip(feedback_texts, sentiment_results)
     ]
-    return {"username": username, "analysis": analysis}
+    
+    # Keyword clustering
+    all_text = " ".join(feedback_texts).lower()
+    words = re.findall(r"\w+", all_text)  # Split into words, remove punctuation
+    filtered_words = [word for word in words if word not in STOP_WORDS and word != username.lower()]
+    keyword_counts = Counter(filtered_words).most_common(5)  # Top 5 keywords
+    
+    return {
+        "username": username,
+        "sentiment_analysis": analysis,
+        "keywords": [{"word": word, "count": count} for word, count in keyword_counts]
+    }
