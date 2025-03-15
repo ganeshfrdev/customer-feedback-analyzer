@@ -23,8 +23,18 @@ FEEDBACK_TEMPLATES = [
 # Sentiment analysis pipeline
 sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 
-# Basic stop words list
+# Stop words
 STOP_WORDS = {"the", "is", "to", "and", "your", "for", "from", "so", "in", "on", "at", "with", "a", "an"}
+
+# Suggestion templates for negative keywords
+SUGGESTIONS = {
+    "slow": "Improve speed or delivery times",
+    "shipping": "Fix shipping delays",
+    "crashed": "Address app stability issues",
+    "expensive": "Review pricing strategy",
+    "terrible": "Investigate customer experience problems",
+    "ugh": "Investigate customer experience problems"
+}
 
 # Database setup
 def init_db():
@@ -84,19 +94,41 @@ def analyze_feedback(username: str):
 
     feedback_texts = [row[0] for row in rows]
     sentiment_results = sentiment_analyzer(feedback_texts)
-    analysis = [
+    sentiment_analysis = [
         {"text": text, "sentiment": result["label"], "confidence": result["score"]}
         for text, result in zip(feedback_texts, sentiment_results)
     ]
     
     # Keyword clustering
     all_text = " ".join(feedback_texts).lower()
-    words = re.findall(r"\w+", all_text)  # Split into words, remove punctuation
+    words = re.findall(r"\w+", all_text)
     filtered_words = [word for word in words if word not in STOP_WORDS and word != username.lower()]
-    keyword_counts = Counter(filtered_words).most_common(5)  # Top 5 keywords
+    keyword_counts = Counter(filtered_words).most_common(5)
+    
+    # Actionable insights
+    insights = {}
+    for word, count in keyword_counts:
+        if word in SUGGESTIONS:
+            # Count negative mentions for this keyword
+            neg_count = sum(1 for analysis in sentiment_analysis 
+                          if word in analysis["text"].lower() and analysis["sentiment"] == "NEGATIVE")
+            if neg_count > 0:  # Only suggest if there's negativity
+                insights[word] = {
+                    "suggestion": SUGGESTIONS[word],
+                    "total_mentions": count,
+                    "negative_mentions": neg_count
+                }
+    
+    # Sort by negative mentions, then total mentions (top 3)
+    sorted_insights = sorted(insights.items(), key=lambda x: (x[1]["negative_mentions"], x[1]["total_mentions"]), reverse=True)[:3]
+    formatted_insights = [
+        f"{item[1]['suggestion']}—mentioned {item[1]['total_mentions']} times, {item[1]['negative_mentions']} negative"
+        for item in sorted_insights
+    ]
     
     return {
         "username": username,
-        "sentiment_analysis": analysis,
-        "keywords": [{"word": word, "count": count} for word, count in keyword_counts]
+        "sentiment_analysis": sentiment_analysis,
+        "keywords": [{"word": word, "count": count} for word, count in keyword_counts],
+        "insights": formatted_insights
     }
